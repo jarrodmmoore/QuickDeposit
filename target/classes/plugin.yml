@@ -1,0 +1,6 @@
+name: QuickDeposit
+version: 1.0-SNAPSHOT
+main: me.flamingosaurus.spigottestplugin.SpigotTestPlugin
+api-version: 1.16
+authors: [ Jarrod ]
+description: Players can deposit an item stack from their hand directly into a chest.
