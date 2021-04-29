@@ -22,118 +22,164 @@ public class ChestTest implements Listener {
     {
         Player p = e.getPlayer();
         Action a = e.getAction();
+
         if (a == Action.RIGHT_CLICK_BLOCK && p.isSneaking() && e.getClickedBlock().getType() == Material.CHEST)
         {
             Block b = e.getClickedBlock();
             Chest c = (Chest) b.getState();
 
-            ItemStack i = p.getInventory().getItemInMainHand();
+            ItemStack itemStack = p.getInventory().getItemInMainHand();
 
             // must have an item in hand
             // also don't bother players in creative please
-            if (i.getType() != Material.AIR && p.getGameMode() != GameMode.CREATIVE)
+            if (itemStack.getType() != Material.AIR && p.getGameMode() != GameMode.CREATIVE)
             {
-                boolean blocked = false;
+                e.setCancelled(true);
+
+                // need permission
+                if (!p.hasPermission("QuickDeposit.deposit"))
+                {
+                    p.sendMessage(ChatColor.RED + "You do not have the required permission to perform a quick deposit!");
+                    return;
+                }
+
+                // check for occluding blocks above the chest segments
+                if (CheckForObstruction(c))
+                {
+                    TellFailure(p,ChatColor.RED + "This chest is obstructed!");
+                    return;
+                }
 
                 // locked chest?
                 if (c.isLocked())
                 {
                     // check item name
-                    if (!c.getLock().equals(i.getItemMeta().getDisplayName()))
+                    if (!c.getLock().equals(itemStack.getItemMeta().getDisplayName()))
                     {
-                        blocked = true;
+                        TellFailure(p,ChatColor.RED + "This chest is locked!");
+                        return;
                     }
                 }
 
-                // check for occluding blocks above the chest segments
-                if (c.getInventory() instanceof DoubleChestInventory)
+                // single chest
+                if (c.getBlockInventory().getHolder() instanceof Chest)
                 {
-                    //System.out.println("you found a double chest!");
-
+                    if (ItemFitsIntoInventory(itemStack, c.getInventory()))
+                    {
+                        Deposit(p, itemStack, c);
+                    }
+                    else
+                    {
+                        TellFailure(p,ChatColor.RED + "This chest is full!");
+                    }
+                }
+                // double chest
+                else if (c.getBlockInventory().getHolder() instanceof DoubleChest)
+                {
                     DoubleChest doubleChest = (DoubleChest) c.getInventory().getHolder();
                     Chest leftChest = (Chest) doubleChest.getLeftSide();
                     Chest rightChest = (Chest) doubleChest.getLeftSide();
 
-                    Location loc1 = leftChest.getLocation();
-                    loc1.add(0.0, 1.0,0.0);
-                    Location loc2 = rightChest.getLocation();
-                    loc2.add(0.0,1.0,0.0);
-
-                    if (loc1.getBlock().getType().isOccluding() || loc2.getBlock().getType().isOccluding())
+                    // attempt to add to the left side first
+                    if (ItemFitsIntoInventory(itemStack, leftChest.getInventory()))
                     {
-                        blocked = true;
+                        Deposit(p, itemStack, leftChest);
                     }
-                }
-                else
-                {
-                    // single chest
-                    Location loc = c.getLocation();
-                    loc.add(0.0,1.0,0.0);
-                    if (loc.getBlock().getType().isOccluding())
+                    // no room? try the right
+                    else if (ItemFitsIntoInventory(itemStack, rightChest.getInventory()))
                     {
-                        blocked = true;
-                    }
-                }
-
-                // need permission
-                if (!p.hasPermission("QuickDeposit.use"))
-                {
-                    p.sendMessage(ChatColor.RED + "You do not have the required permission to perform a quick deposit!");
-                    e.setCancelled(true);
-                }
-                else
-                {
-                    if (blocked)
-                    {
-                        p.sendMessage(ChatColor.RED + "This chest is locked!");
-                        p.playSound(p.getLocation(), Sound.ENTITY_VILLAGER_NO, 1, 1);
-                        e.setCancelled(true);
+                        Deposit(p, itemStack, rightChest);
                     }
                     else
                     {
-                        // do we have room to add the item?
-                        int spaceNeeded = i.getAmount();
-                        for (ItemStack slot : c.getInventory().getContents())
-                        {
-                            if (slot == null)
-                            {
-                                spaceNeeded -= i.getMaxStackSize();
-                            }
-                            else
-                            {
-                                if (slot.getType() == i.getType())
-                                {
-                                    if (slot.getItemMeta().equals(i.getItemMeta()))
-                                    {
-                                        spaceNeeded -= i.getMaxStackSize() - slot.getAmount();
-                                    }
-                                }
-                            }
-                        }
-
-                        // do we have room to add?
-                        if (spaceNeeded <= 0)
-                        {
-                            c.getBlockInventory().addItem(i);
-
-                            p.getInventory().setItemInMainHand(null);
-
-                            p.sendMessage(ChatColor.GREEN + "Deposited your held item into the chest.");
-                            p.playSound(p.getLocation(), Sound.ENTITY_ARROW_HIT_PLAYER, 1, 1);
-                        }
-                        else
-                        {
-                            p.sendMessage(ChatColor.RED + "Sorry, there's not enough room to quick deposit your item!");
-                            p.playSound(p.getLocation(), Sound.ENTITY_VILLAGER_NO, 1, 1);
-                            e.setCancelled(true);
-                        }
-
+                        TellFailure(p,ChatColor.RED + "This chest is full!");
                     }
                 }
-
             }
         }
-
     }
 
+    // Deposits item from player's hand into a chest
+    private void Deposit(Player p, ItemStack itemStack, Chest c)
+    {
+        c.getBlockInventory().addItem(itemStack);
+        p.getInventory().setItemInMainHand(null);
+        TellSuccess(p,ChatColor.GREEN + "Deposited "
+                + itemStack.getAmount() + "x " + itemStack.getType().toString().toLowerCase() + " into the chest.");
+    }
+
+    // Returns the block 1 above the given one
+    private Block GetBlockAbove(Block b)
+    {
+        return b.getLocation().add(0.0,1.0,0.0).getBlock();
+    }
+
+    // Checks if a given chest has an occluding block above it
+    private boolean CheckForObstruction(Chest c)
+    {
+        if (c.getBlockInventory().getHolder() instanceof Chest)
+        {
+            if (GetBlockAbove(c.getBlock()).getType().isOccluding())
+            {
+                return true;
+            }
+            return false;
+        }
+        else if (c.getBlockInventory().getHolder() instanceof DoubleChest)
+        {
+            DoubleChest doubleChest = (DoubleChest) c.getInventory().getHolder();
+            Chest leftChest = (Chest) doubleChest.getLeftSide();
+            Chest rightChest = (Chest) doubleChest.getLeftSide();
+
+            if (GetBlockAbove(leftChest.getBlock()).getType().isOccluding() || GetBlockAbove(rightChest.getBlock()).getType().isOccluding())
+            {
+                return true;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    // checks whether the item will fit into the target inventory
+    private boolean ItemFitsIntoInventory(ItemStack itemStack, Inventory inv)
+    {
+        // do we have room to add the item?
+        int spaceNeeded = itemStack.getAmount();
+        for (ItemStack slot : inv.getContents())
+        {
+            if (slot == null)
+            {
+                spaceNeeded -= itemStack.getMaxStackSize();
+            }
+            else
+            {
+                if (slot.getType() == itemStack.getType())
+                {
+                    if (slot.getItemMeta().equals(itemStack.getItemMeta()))
+                    {
+                        spaceNeeded -= itemStack.getMaxStackSize() - slot.getAmount();
+                    }
+                }
+            }
+        }
+        if (spaceNeeded <= 0)
+        {
+            return true;
+        }
+        return false;
+    }
+
+    // sends a success message + sound to the player
+    private void TellSuccess(Player p, String s)
+    {
+        p.sendMessage(s);
+        p.playSound(p.getLocation(), Sound.ENTITY_ARROW_HIT_PLAYER, 1, 1);
+    }
+
+    // send an error message + sound to the player
+    private void TellFailure(Player p,String s)
+    {
+        p.sendMessage(s);
+        p.playSound(p.getLocation(), Sound.ENTITY_VILLAGER_NO, 1, 1);
+    }
 }
